@@ -1,0 +1,65 @@
+#include <iostream>
+#include <queue>
+#include <thread>
+#include <random>
+#include <condition_variable>
+#include <atomic>
+
+std::queue<int> bufor;
+std::mutex mtx;
+std::condition_variable cv_producent, cv_konsument;
+const int ROZMIAR_BUFORU = 10;
+
+std::atomic<bool> stop(false);
+
+void producent() {
+    std::default_random_engine generator;
+    std::uniform_int_distribution<int> rozkład(1, 100);
+
+    while (!stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // symulacja opóźnienia
+
+        int liczba = rozkład(generator);
+        
+        std::unique_lock<std::mutex> lock(mtx);
+        cv_producent.wait(lock, [](){ return bufor.size() < ROZMIAR_BUFORU; }); // czekaj na miejsce w buforze
+        
+        bufor.push(liczba);
+        std::cout << "Wyprodukowana liczba: " << liczba << std::endl;
+        cv_konsument.notify_one(); // powiadom konsumenta
+    }
+}
+
+void konsument() {
+    while (!stop) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // symulacja opóźnienia
+
+        std::unique_lock<std::mutex> lock(mtx);
+        cv_konsument.wait(lock, [](){ return !bufor.empty(); }); // czekaj na dostępność danych
+        
+        int liczba = bufor.front();
+        bufor.pop();
+        std::cout << "Skonsumowana liczba: " << liczba << std::endl;
+
+        int wynik = 1;
+        for (int i = 0; i < liczba; ++i) {
+            wynik *= 2; // przykładowa operacja, podniesienie do potęgi 2
+        }
+        std::cout << "Przetworzony wynik: " << wynik << std::endl;
+
+        cv_producent.notify_one(); // powiadom producenta
+    }
+}
+
+int main() {
+    std::thread w1(producent);
+    std::thread w2(konsument);
+
+    std::this_thread::sleep_for(std::chrono::seconds(5)); // pozwól wątkom działać przez chwilę
+    stop = true;
+
+    w1.join();
+    w2.join();
+
+    return 0;
+}

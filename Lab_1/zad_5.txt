@@ -1,0 +1,53 @@
+#include <iostream>
+#include <vector>
+#include <thread>
+#include <numeric>
+#include <atomic>
+#include <random>
+
+std::atomic<int> suma_globalna(0);
+std::atomic<double> srednia_globalna(0.0);
+
+void przetwórz_fragment(const std::vector<int>& dane, size_t poczatek, size_t koniec, int& suma_lokalna, double& srednia_lokalna) {
+    suma_lokalna = std::accumulate(dane.begin() + poczatek, dane.begin() + koniec, 0);
+    srednia_lokalna = static_cast<double>(suma_lokalna) / (koniec - poczatek);
+
+    suma_globalna.fetch_add(suma_lokalna, std::memory_order_relaxed);
+    srednia_globalna.fetch_add(srednia_lokalna, std::memory_order_relaxed);
+}
+
+int main() {
+    const size_t N = 1000000;
+    std::vector<int> dane(N);
+    
+    // Wypełnienie wektora losowymi liczbami
+    std::default_random_engine generator;
+    std::uniform_int_distribution<int> rozkład(1, 100);
+    for (size_t i = 0; i < N; ++i) {
+        dane[i] = rozkład(generator);
+    }
+
+    const size_t liczba_wątków = 4;
+    size_t rozmiar_fragmentu = N / liczba_wątków;
+    std::vector<std::thread> wątki;
+    std::vector<int> suma_lokalne(liczba_wątków, 0);
+    std::vector<double> średnia_lokalne(liczba_wątków, 0.0);
+
+    for (size_t i = 0; i < liczba_wątków; ++i) {
+        size_t poczatek = i * rozmiar_fragmentu;
+        size_t koniec = (i == liczba_wątków - 1) ? N : (i + 1) * rozmiar_fragmentu;
+        wątki.push_back(std::thread(przetwórz_fragment, std::ref(dane), poczatek, koniec, std::ref(suma_lokalne[i]), std::ref(średnia_lokalne[i])));
+    }
+
+    for (auto& w : wątki) {
+        w.join();
+    }
+
+    double średnia_finalna = srednia_globalna.load() / liczba_wątków;
+    int suma_finalna = suma_globalna.load();
+
+    std::cout << "Suma finalna: " << suma_finalna << std::endl;
+    std::cout << "Średnia finalna: " << średnia_finalna << std::endl;
+
+    return 0;
+}

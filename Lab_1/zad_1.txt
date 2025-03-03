@@ -1,0 +1,29 @@
+#include <iostream>
+#include <thread>
+#include <atomic>
+
+std::atomic<int> licznik(0); // zmienna typu atomic, aby uniknąć problemów z synchronizacją
+
+void zwieksz_licznik() {
+    for (int i = 0; i < 10000; ++i) {
+        ++licznik;
+    }
+}
+
+void zmniejsz_licznik() {
+    for (int i = 0; i < 10000; ++i) {
+        --licznik;
+    }
+}
+
+int main() {
+    std::thread watek1(zwieksz_licznik);
+    std::thread watek2(zmniejsz_licznik);
+
+    watek1.join();
+    watek2.join();
+
+    std::cout << "Końcowa wartość licznika: " << licznik.load() << std::endl;
+
+    return 0;
+}
