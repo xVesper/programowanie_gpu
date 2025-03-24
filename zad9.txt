@@ -1,0 +1,105 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cuda_runtime.h>
+
+#define PART_SIZE 1024  // Rozmiar jednej części do przetworzenia przez jeden blok
+#define BLOCK_SIZE 256  // Rozmiar jednego bloku wątku (GPU)
+
+__global__ void vectorAddKernel(float *d_A, float *d_B, float *d_C, int num_elements) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;  // Globalny indeks wątku
+
+    if (idx < num_elements) {
+        d_C[idx] = d_A[idx] + d_B[idx];
+    }
+}
+
+void loadVectorPart(std::ifstream &file, float *vec, int startIdx, int partSize) {
+    file.seekg(startIdx * sizeof(float), std::ios::beg);
+    for (int i = 0; i < partSize; ++i) {
+        file.read(reinterpret_cast<char*>(&vec[i]), sizeof(float));
+    }
+}
+
+void saveVectorPart(std::ofstream &file, float *vec, int partSize) {
+    for (int i = 0; i < partSize; ++i) {
+        file.write(reinterpret_cast<char*>(&vec[i]), sizeof(float));
+    }
+}
+
+void vectorAddCUDA(const char *fileA, const char *fileB, const char *outputFile, int vectorSize) {
+    std::ifstream inputFileA(fileA, std::ios::binary);
+    std::ifstream inputFileB(fileB, std::ios::binary);
+    std::ofstream outputFileStream(outputFile, std::ios::binary);
+
+    if (!inputFileA.is_open() || !inputFileB.is_open() || !outputFileStream.is_open()) {
+        std::cerr << "Nie udało się otworzyć plików!" << std::endl;
+        return;
+    }
+
+    int numParts = (vectorSize + PART_SIZE - 1) / PART_SIZE;
+    float *d_A, *d_B, *d_C;
+    float *h_A = new float[PART_SIZE];
+    float *h_B = new float[PART_SIZE];
+    float *h_C = new float[PART_SIZE];
+
+    // Przydzielenie pamięci na GPU
+    cudaMalloc((void**)&d_A, PART_SIZE * sizeof(float));
+    cudaMalloc((void**)&d_B, PART_SIZE * sizeof(float));
+    cudaMalloc((void**)&d_C, PART_SIZE * sizeof(float));
+
+    // Przetwarzanie wektorów w częściach
+    for (int i = 0; i < numParts; ++i) {
+        int startIdx = i * PART_SIZE;
+        int partSize = std::min(PART_SIZE, vectorSize - startIdx);
+
+        // Wczytywanie fragmentów wektorów z plików
+        loadVectorPart(inputFileA, h_A, startIdx, partSize);
+        loadVectorPart(inputFileB, h_B, startIdx, partSize);
+
+        // Kopiowanie danych na GPU
+        cudaMemcpy(d_A, h_A, partSize * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_B, h_B, partSize * sizeof(float), cudaMemcpyHostToDevice);
+
+        // Uruchomienie kernela CUDA
+        int numBlocks = (partSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        vectorAddKernel<<<numBlocks, BLOCK_SIZE>>>(d_A, d_B, d_C, partSize);
+
+        // Sprawdzenie błędów
+        cudaDeviceSynchronize();
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA error: " << cudaGetErrorString(err) << std::endl;
+            return;
+        }
+
+        // Kopiowanie wyników z powrotem na CPU
+        cudaMemcpy(h_C, d_C, partSize * sizeof(float), cudaMemcpyDeviceToHost);
+
+        // Zapisywanie wyników do pliku
+        saveVectorPart(outputFileStream, h_C, partSize);
+    }
+
+    // Zwolnienie pamięci na GPU
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    delete[] h_A;
+    delete[] h_B;
+    delete[] h_C;
+}
+
+int main() {
+    const char *fileA = "vector_a.bin";  // Plik z wektorem A
+    const char *fileB = "vector_b.bin";  // Plik z wektorem B
+    const char *outputFile = "vector_c.bin";  // Plik wynikowy
+
+    int vectorSize = 1000000;  // Rozmiar wektora
+
+    vectorAddCUDA(fileA, fileB, outputFile, vectorSize);
+
+    std::cout << "Suma wektorów została zapisana do pliku " << outputFile << std::endl;
+
+    return 0;
+}
